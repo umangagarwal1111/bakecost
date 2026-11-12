@@ -1,0 +1,8 @@
+# BakeCost - Python 3.11+
+streamlit>=1.40
+pandas>=2.0
+numpy>=1.26
+Pillow>=10.1
+pytesseract>=0.3.10   # also needs the Tesseract program itself - see README
+fpdf2>=2.7
+pytest>=8.0
