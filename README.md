@@ -95,6 +95,20 @@ Other commands:
 Data is stored in `data/bakecost.db` (a single SQLite file; back it up by copying it).
 Set the `BAKECOST_DB` environment variable to use a different file.
 
+### Host it online for others to try (free)
+1. Push this folder to a GitHub repository (private is fine).
+2. Go to <https://share.streamlit.io>, sign in with GitHub, press **Create app**, and pick the
+   repository, branch `main` and main file `app.py`.
+3. Under **Advanced settings**, choose Python **3.12** and paste this into **Secrets**:
+   ```toml
+   BAKECOST_DEMO = "1"
+   ```
+4. Press **Deploy**. `packages.txt` makes the server install Tesseract automatically.
+
+`BAKECOST_DEMO=1` turns on **demo mode**: every visitor gets their own private copy of the demo
+data, held in memory and reset when they close the tab, so testers never overwrite each other's work.
+Don't use demo mode for real business data; it is never saved.
+
 ---
 
 ## 3. Architecture
