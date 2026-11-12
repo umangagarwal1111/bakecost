@@ -1,7 +1,8 @@
 # BakeCost: Costing and Invoicing for Home Bakers
 
-**Live app (try it in your browser, no install or login):** LIVE_APP_LINK
-**Source code:** CODE_LINK
+**Live app (try it in your browser, no install or login):** https://bakecost.streamlit.app
+
+**Source code:** https://github.com/umangagarwal1111/bakecost
 
 ---
 
