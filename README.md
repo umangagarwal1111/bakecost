@@ -2,6 +2,8 @@
 
 **Know what every cake costs you — and price it with confidence.**
 
+> 📄 **Judges / faculty:** start with the one-page write-up in [SUBMISSION.md](SUBMISSION.md).
+
 BakeCost is a desktop/web app for home bakers and one-person home businesses. It keeps an
 **Ingredient Library** (with prices) and a **Recipe Book** (with quantities), works out what an
 order really costs to make, adds your fixed costs, profit and tax, and produces a clean
