@@ -309,23 +309,70 @@ def price_order(
 
 
 # ---------------------------------------------------------------------------
-# Whole-order helper used by the New Order page (and the end-to-end test)
+# Whole orders (one or more items) - used by the New Order page and the tests
+#
+# Ingredients are costed per item. Fixed costs belong to the ORDER: a box and
+# a delivery trip are paid once, however many items are in it, and per-kg
+# costs use the total weight. To print a price on every invoice line, each
+# fixed cost is then shared between the items:
+#   per_kg          in proportion to each item's weight
+#   per_order       in proportion to each item's ingredient cost
+#   percent_of_cost in proportion to each item's ingredient cost
+# Profit (margin or markup) is linear in cost, so pricing every line
+# separately adds up to exactly the same total as pricing the whole order.
+# Tax and round-off are worked out from the printed (paise-rounded) line
+# amounts, so every number on the invoice adds up to the paisa.
+# Cost: O(total ingredient rows + items x fixed costs).
 # ---------------------------------------------------------------------------
 
 
 @dataclass
-class Quote:
+class OrderItem:
+    """One thing the customer orders: a recipe and how much of it."""
+
+    recipe: dict          # from db.get_recipe()
+    quantity: float
+    unit: str
+
+
+@dataclass
+class QuotedItem:
     recipe_name: str
     order_quantity: float
     order_unit: str
     factor: float
     estimate: CostEstimate
     weight_kg: float
-    price: PriceBreakdown
+    fixed_share: float = 0.0      # this item's share of the order's fixed costs
+    selling_price: float = 0.0    # before tax, exact
+    amount: float = 0.0           # selling price rounded to paise, as printed on the invoice
 
     @property
     def order_text(self) -> str:
         return f"{self.order_quantity:g} {self.order_unit}"
+
+    @property
+    def production_cost(self) -> float:
+        return self.estimate.total + self.fixed_share
+
+
+@dataclass
+class Quote:
+    items: list[QuotedItem]
+    price: PriceBreakdown         # the whole-order pipeline (fixed costs counted once)
+    subtotal: float               # sum of the printed line amounts
+    tax_amount: float
+    round_off: float
+    final_total: float
+
+    @property
+    def weight_kg(self) -> float:
+        return sum(i.weight_kg for i in self.items)
+
+    @property
+    def warnings(self) -> list[str]:
+        many = len(self.items) > 1
+        return [f"{i.recipe_name}: {w}" if many else w for i in self.items for w in i.estimate.warnings]
 
 
 def lines_from_recipe(recipe: dict) -> list[IngredientLine]:
@@ -339,38 +386,87 @@ def lines_from_recipe(recipe: dict) -> list[IngredientLine]:
     ]
 
 
-def build_quote(recipe: dict, fixed_costs: list[dict], order_quantity: float, order_unit: str,
-                profit_percent: float, profit_mode: str, tax_percent: float, rounding_step: float,
-                today: date | None = None) -> Quote:
-    """Scale -> cost -> fixed costs -> profit -> tax -> round, for one order."""
-    factor = scale_factor(recipe["yield_quantity"], recipe["yield_unit"], order_quantity, order_unit)
-    estimate = estimate_cost(lines_from_recipe(recipe), factor, recipe["wastage_percent"], today)
-    weight = estimate_weight_kg(estimate.lines, recipe["yield_unit"], order_quantity, order_unit)
+def _shares(values: list[float]) -> list[float]:
+    """Each value's fraction of the total; equal shares if the total is 0."""
+    total = sum(values)
+    if total <= 0:
+        return [1 / len(values)] * len(values)
+    return [v / total for v in values]
+
+
+def build_quote(items: list[OrderItem], fixed_costs: list[dict], profit_percent: float, profit_mode: str,
+                tax_percent: float, rounding_step: float, today: date | None = None) -> Quote:
+    """Price a whole order: scale and cost each item, add fixed costs once,
+    then profit, tax and rounding (see the section comment above)."""
+    if not items:
+        raise ValueError("Add at least one item to the order.")
+
+    quoted: list[QuotedItem] = []
+    for item in items:
+        r = item.recipe
+        factor = scale_factor(r["yield_quantity"], r["yield_unit"], item.quantity, item.unit)
+        estimate = estimate_cost(lines_from_recipe(r), factor, r["wastage_percent"], today)
+        weight = estimate_weight_kg(estimate.lines, r["yield_unit"], item.quantity, item.unit)
+        quoted.append(QuotedItem(r["name"], item.quantity, item.unit, factor, estimate, weight))
+
     rules = [FixedCost(fc["name"], fc["type"], fc["value"]) for fc in fixed_costs if fc.get("active", 1)]
-    price = price_order(estimate.total, rules, weight, profit_percent, profit_mode, tax_percent, rounding_step)
-    return Quote(recipe["name"], order_quantity, order_unit, factor, estimate, weight, price)
+    ingredient_cost = sum(q.estimate.total for q in quoted)
+    price = price_order(ingredient_cost, rules, sum(q.weight_kg for q in quoted),
+                        profit_percent, profit_mode, tax_percent, rounding_step)
+
+    # Share each fixed cost between the items.
+    by_cost = _shares([q.estimate.total for q in quoted])
+    by_weight = _shares([q.weight_kg for q in quoted])
+    for rule, (_, amount) in zip(rules, price.fixed_cost_lines):
+        shares = by_weight if rule.type == "per_kg" else by_cost
+        for q, share in zip(quoted, shares):
+            q.fixed_share += amount * share
+
+    for q in quoted:
+        q.selling_price = apply_profit(q.production_cost, profit_percent, profit_mode)
+        q.amount = round(q.selling_price, 2)
+
+    subtotal = round(sum(q.amount for q in quoted), 2)
+    tax_amount = round(subtotal * tax_percent / 100.0, 2)
+    final_total = round_to_nearest(subtotal + tax_amount, rounding_step)
+    round_off = round(final_total - subtotal - tax_amount, 2)
+    return Quote(quoted, price, subtotal, tax_amount, round_off, final_total)
+
+
+def invoice_line_items(quote: Quote) -> list[dict]:
+    """What the customer sees: one line per item."""
+    return [{"description": q.recipe_name, "quantity_text": q.order_text, "amount": q.amount} for q in quote.items]
 
 
 def cost_sheet(quote: Quote) -> dict:
     """A JSON-friendly snapshot of every number, stored with the invoice so the
     internal cost sheet can be reprinted later even if prices change."""
-    lines = []
-    for l in quote.estimate.lines:
-        shown_price, per = units.price_for_display(l.price_per_base_unit, l.base_unit)
-        lines.append({
-            "name": l.name, "cost": round(l.cost, 2), "flags": l.flags,
-            "quantity_text": f"{l.quantity:g} {l.unit}",
-            "price_text": "no price" if shown_price is None else f"Rs. {shown_price:,.2f}/{per}",
+    items = []
+    for q in quote.items:
+        lines = []
+        for l in q.estimate.lines:
+            shown_price, per = units.price_for_display(l.price_per_base_unit, l.base_unit)
+            lines.append({
+                "name": l.name, "cost": round(l.cost, 2), "flags": l.flags,
+                "quantity_text": f"{l.quantity:g} {l.unit}",
+                "price_text": "no price" if shown_price is None else f"Rs. {shown_price:,.2f}/{per}",
+            })
+        items.append({
+            "recipe_name": q.recipe_name, "order_text": q.order_text, "scale_factor": q.factor,
+            "weight_kg": q.weight_kg, "lines": lines,
+            "ingredients_subtotal": q.estimate.ingredients_subtotal,
+            "wastage_percent": q.estimate.wastage_percent, "wastage_amount": q.estimate.wastage_amount,
+            "ingredient_cost": q.estimate.total, "fixed_share": q.fixed_share,
+            "production_cost": q.production_cost, "amount": q.amount,
         })
     p = quote.price
+    production_cost = sum(q.production_cost for q in quote.items)
     return {
-        "recipe_name": quote.recipe_name, "order_text": quote.order_text,
-        "scale_factor": quote.factor, "weight_kg": quote.weight_kg, "lines": lines,
-        "ingredients_subtotal": quote.estimate.ingredients_subtotal,
-        "wastage_percent": quote.estimate.wastage_percent, "wastage_amount": quote.estimate.wastage_amount,
+        "items": items,
         "ingredient_cost": p.ingredient_cost, "fixed_cost_lines": p.fixed_cost_lines,
-        "fixed_costs_total": p.fixed_costs_total, "production_cost": p.production_cost,
-        "profit_mode": p.profit_mode, "profit_percent": p.profit_percent, "profit_amount": p.profit_amount,
-        "selling_price": p.selling_price, "tax_percent": p.tax_percent, "tax_amount": p.tax_amount,
-        "round_off": p.round_off, "final_total": p.final_total, "warnings": quote.estimate.warnings,
+        "fixed_costs_total": p.fixed_costs_total, "production_cost": production_cost,
+        "profit_mode": p.profit_mode, "profit_percent": p.profit_percent,
+        "profit_amount": quote.subtotal - production_cost,
+        "selling_price": quote.subtotal, "tax_percent": p.tax_percent, "tax_amount": quote.tax_amount,
+        "round_off": quote.round_off, "final_total": quote.final_total, "warnings": quote.warnings,
     }

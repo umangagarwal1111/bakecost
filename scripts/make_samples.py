@@ -7,6 +7,7 @@ Creates in samples/:
   bill_grocery.png       a clean, straight printed bill
   bill_photo_tilted.png  the same bill tilted 4 degrees, greyish and noisy,
                          like a quick phone photo (exercises the deskew step)
+  bill_handwritten.png   a hand-written bill (the app should refuse it)
   recipe_cupcakes.png    a typed recipe card
 """
 
@@ -97,6 +98,37 @@ def photo_effect(img: Image.Image, angle: float, seed: int = 7) -> Image.Image:
     return tilted.filter(ImageFilter.GaussianBlur(0.8))
 
 
+# Handwriting-style fonts; each letter is also wobbled randomly below so the
+# result looks hand-made rather than like a neat "handwriting" typeface.
+HAND_FONTS = [
+    "/System/Library/Fonts/Noteworthy.ttc",     # macOS
+    "C:/Windows/Fonts/segoepr.ttf",             # Windows (Segoe Print)
+]
+HAND_LINES = ["Sri Balaji Kirana", "Maida 1kg   2   92", "Butter 500g  1  285",
+              "Sugar 1kg  3  147", "Eggs  30  225", "Total  749"]
+
+
+def make_handwritten_bill(seed: int = 1, wobble: int = 5) -> Image.Image:
+    """Draw letter by letter with random size, tilt, height and ink darkness."""
+    rnd = random.Random(seed)
+    path = next((p for p in HAND_FONTS if Path(p).exists()), None)
+    img = Image.new("L", (1100, 700), 250)
+    y = 50
+    for line in HAND_LINES:
+        x = 60 + rnd.randint(-10, 10)
+        for ch in line:
+            size = rnd.randint(36 - wobble, 36 + wobble)
+            f = ImageFont.truetype(path, size) if path else ImageFont.load_default(size=size)
+            tile = Image.new("L", (size * 2, size * 2), 0)
+            ImageDraw.Draw(tile).text((size // 2, size // 3), ch, font=f, fill=255)
+            tile = tile.rotate(rnd.uniform(-wobble * 1.5, wobble * 1.5), resample=Image.BICUBIC)
+            ink = Image.new("L", tile.size, rnd.randint(20, 70))
+            img.paste(ink, (x - size // 2, y + rnd.randint(-wobble, wobble) - size // 3), tile)
+            x += int(f.getlength(ch) * rnd.uniform(0.9, 1.15)) if ch != " " else size // 2
+        y += 95 + rnd.randint(-8, 8)
+    return img
+
+
 RECIPE_LINES = [
     ("Eggless Chocolate Cupcakes", "title"),
     ("Makes 12 pcs", "normal"),
@@ -135,6 +167,7 @@ def main() -> None:
     bill = make_bill()
     bill.save(OUT / "bill_grocery.png")
     photo_effect(bill, angle=4).save(OUT / "bill_photo_tilted.png")
+    make_handwritten_bill().save(OUT / "bill_handwritten.png")
     make_recipe().save(OUT / "recipe_cupcakes.png")
     print(f"Wrote sample images to {OUT}")
 

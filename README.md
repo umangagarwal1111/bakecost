@@ -90,7 +90,7 @@ Other commands:
 
 | Command | What it does |
 |---|---|
-| `pytest` | Run all 146 automated tests (OCR tests are skipped if Tesseract is missing) |
+| `pytest` | Run all 160 automated tests (OCR tests are skipped if Tesseract is missing) |
 | `python seed.py` | Load demo data from the terminal (asks first; `--yes` to skip the question) |
 | `python scripts/make_samples.py` | Re-create the synthetic sample bill/recipe images in `samples/` |
 
@@ -227,6 +227,14 @@ rounding, which surprises people with money: `round(2.5) == 2`).
 Order weight for per-kg costs: the order itself for kg recipes; for piece recipes, the sum of the
 g/ml ingredients after scaling. **Complexity:** O(f) for f fixed costs.
 
+**Orders with several items** (`costing.build_quote`): each item is scaled and costed on its
+own, but fixed costs belong to the *order*. A box and a delivery trip are paid once, and per-kg
+costs use the total weight. To print a price on every invoice line, each fixed cost is shared
+between the items: per-kg costs by weight, the rest by ingredient cost. Margin and markup are
+linear in cost, so pricing each line separately gives exactly the same total as pricing the
+whole order. Tax and round-off are computed from the printed line amounts, so the invoice adds
+up to the paisa. **Complexity:** O(r + i × f) for r ingredient rows, i items, f fixed costs.
+
 ### 5.5 Fuzzy bill-name matching (`modules/matching.py`)
 Bills say "AMUL BUTTR 500G PKT"; the library says "Butter". For each library name and alias:
 1. **Normalise:** lowercase, drop digits, units and filler words (`pkt`, `loose`, `premium`…) → `["amul", "buttr"]`.
@@ -267,11 +275,24 @@ stop at "Method". **Complexity:** O(total characters).
 On the sample "phone photo" (tilted 4°, uneven light, noise) the deskew finds −4.0° and every
 line is read correctly.
 
+### 5.8 Handwritten-bill detection (`ocr.looks_handwritten`)
+Tesseract gives a confidence (0–100) for every word it reads, and BakeCost reads text and
+confidences in a single OCR pass. Printed text scores 90+ almost everywhere. With handwriting no
+two letters look alike, so the average drops and many words fall below 50. Measured on the
+samples: printed bills average 93–95 with 0–2 % weak words; simulated handwriting averages 56–77
+with 10–35 % weak words. A bill counts as handwritten if the **average is below 80** or
+**25 % or more of the words score below 50** (at least 3 words needed to judge). The Bill Scan
+page then refuses it: *"This bill looks handwritten. Please upload a printed or digital bill."*
+A misread price would silently corrupt the ingredient library, so a guess isn't worth the risk.
+Recipe scans only show a warning, since a person checks every recipe line anyway.
+**Complexity:** O(w) for w words.
+
 ---
 
 ## 6. Known limitations
-- **Handwriting:** Tesseract is trained on print. Handwritten recipes usually need manual
-  correction; the app says so and lets you type instead.
+- **Handwriting:** Tesseract is trained on print. Handwritten **bills are refused**, and
+  handwritten recipes usually need manual correction (the app warns and lets you type instead).
+  A very blurry photo of a *printed* bill can also be refused; the message asks for a clearer photo.
 - **Real-world bills vary a lot:** thermal-paper fade, multi-line item names, or columns in
   unusual orders can confuse the parser. Every line goes through the editable review table, so
   mistakes are caught, not saved.
@@ -281,8 +302,6 @@ line is read correctly.
   (±10 %). For exact costing, write recipes in grams.
 - **Per-kg costs for piece recipes** use the raw ingredient weight, which slightly over-states
   the baked weight (moisture is lost in the oven), so it errs on the side of not under-charging.
-- **One item per invoice** from the New Order page (the data model stores a list of line items,
-  so multi-item invoices are a UI addition).
 - **PDF uses "Rs."** instead of "₹": the built-in PDF fonts don't include the rupee sign, and
   non-Latin characters in names (e.g. Hindi) print as "?". Bundling a Unicode TTF font would fix both.
 - **Single user, single device:** SQLite file on one machine; no login or cloud sync. Back up
@@ -323,9 +342,10 @@ BAKECOST/
 │   ├── ocr.py             Photo clean-up + swappable OCR engine (Tesseract by default)
 │   └── invoice.py         Customer invoice and internal cost sheet PDFs (fpdf2)
 ├── views/                 One Streamlit page per file (+ common.py, scan_common.py helpers)
-├── tests/                 146 pytest tests: units, costing, matching, parsing, db, OCR,
+├── tests/                 160 pytest tests: units, costing, matching, parsing, db, OCR,
 │                          end-to-end order → PDF, and a headless run of every page
 ├── scripts/make_samples.py   Generates the synthetic sample images
-├── samples/               bill_grocery.png, bill_photo_tilted.png, recipe_cupcakes.png
+├── scripts/keep_awake.py  Wakes the hosted app (run every 6 h by .github/workflows/keep-awake.yml)
+├── samples/               bill_grocery.png, bill_photo_tilted.png, bill_handwritten.png, recipe_cupcakes.png
 └── data/bakecost.db       Created on first run
 ```

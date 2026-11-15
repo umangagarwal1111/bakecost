@@ -17,8 +17,8 @@ BakeCost is a simple app made for non-technical users. It:
 
 - **Keeps an Ingredient Library** with current prices and a full price history. Prices older than 60 days are flagged.
 - **Keeps a Recipe Book.** Each recipe lists what goes into one batch and how much that batch makes.
-- **Reads shop bills from a photo** (camera or upload) to update prices, and **reads recipe photos** to add recipes. The user checks every line in an editable table before anything is saved.
-- **Prices an order.** It scales the recipe to the order size, costs every ingredient, adds wastage and fixed costs (gas, packaging, labour, delivery), then profit and tax, and rounds to the nearest ₹5 or ₹10.
+- **Reads shop bills from a photo** (camera or upload) to update prices, and **reads recipe photos** to add recipes. The user checks every line in an editable table before anything is saved. **Handwritten bills are detected and refused**, because a misread price would silently corrupt the library.
+- **Prices an order of one or more items.** It scales each recipe to the size ordered, costs every ingredient, adds wastage and fixed costs (gas, packaging, labour, delivery, with per-order costs such as the box and delivery counted once per order), then profit and tax, and rounds to the nearest ₹5 or ₹10.
 - **Explains margin and markup.** "50% profit" gives ₹1,141 under margin but ₹856 under markup for the same cake, and the app shows both side by side.
 - **Creates a PDF invoice** for the customer, plus a separate internal cost sheet that the customer never sees.
 
@@ -39,26 +39,28 @@ We wrote the core logic ourselves rather than relying on libraries:
 | Pricing | Margin: cost ÷ (1 − m); Markup: cost × (1 + m); then tax and half-up rounding | O(f) fixed costs |
 | Fuzzy matching | Matches "AMUL BUTTR 500G" to "Butter" with a confidence score; learns new bill names | O(B·I·A·L²) |
 | Photo clean-up | Straightens tilted photos (projection profile) and converts them to black and white (Otsu's method) | O(pixels) |
+| Handwriting check | Refuses bills whose average OCR word confidence is below 80% or that have 25%+ weak words | O(words) |
+| Multi-item pricing | Charges fixed costs once per order and shares them between invoice lines by weight or cost | O(items × fixed costs) |
 
 ## Technology
 Python 3.11+ only: Streamlit (interface), SQLite (database), Tesseract OCR via pytesseract, Pillow,
 and fpdf2 (PDF). If OCR isn't available, the app still works fully with typed entry.
 
 ## Testing
-147 automated tests (pytest) cover unit conversion, scaling, costing, pricing, matching, text
+160 automated tests (pytest) cover unit conversion, scaling, costing, pricing, matching, text
 parsing, the database, OCR on sample photos, the full order-to-PDF flow, and a headless run of every page.
 
 ## Try it in 2 minutes
 1. Open the live app. It starts with demo data: 25 ingredients and 4 recipes.
-2. **Scan a Bill** → *Use a sample* → `bill_photo_tilted.png` → **Read the text**. Check the table, then press **Update prices**.
-3. **New Order** → *Chocolate Truffle Cake*, 1 kg, any customer name. Open "Margin or markup?".
+2. **Scan a Bill** → *Use a sample* → `bill_photo_tilted.png` → **Read the text**. Check the table, then press **Update prices**. Then try `bill_handwritten.png` to see a handwritten bill refused.
+3. **New Order** → *Chocolate Truffle Cake*, 1 kg, any customer name. Open "Margin or markup?". Press **➕ Add another item** to add, for example, Walnut Brownies.
 4. Press **Create invoice**, then **Download invoice (PDF)**.
 
 *Each visitor gets a private copy of the demo data, which resets when the tab is closed.*
 
 ## Limitations and future work
-Handwritten recipes need manual correction. Cup-to-gram densities are averages (±10%). Each invoice
-holds one item. Next steps: multi-item invoices, a rupee-symbol font in PDFs, and cloud backup.
+Handwritten bills are refused, and handwritten recipes need manual correction. Cup-to-gram densities
+are averages (±10%). Next steps: a rupee-symbol font in PDFs, discounts per item, and cloud backup.
 
 ## Tools used
 Built with the help of Claude Code, an AI coding assistant, for code generation and testing.

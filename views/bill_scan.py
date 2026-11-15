@@ -21,8 +21,8 @@ BIG_CHANGE = 0.5  # warn when a price moves by more than 50 %
 
 conn = get_conn()
 st.title("📷 Scan a Bill")
-st.caption("Photograph a shop bill. BakeCost reads it, **you check every line**, "
-           "and only the lines you confirm update your prices.")
+st.caption("Photograph a **printed or digital** shop bill. BakeCost reads it, **you check every line**, "
+           "and only the lines you confirm update your prices. Handwritten bills can't be read reliably.")
 show_flash()
 if empty_library_hint(conn):
     st.stop()
@@ -32,7 +32,7 @@ st.subheader("1 · Photo")
 image_bytes = pick_image("bill", "bill_*.png")
 if "_bill_text_next" in st.session_state:          # set by a previous save; see ocr_step()
     st.session_state["bill_text"] = st.session_state.pop("_bill_text_next")
-ocr_step(image_bytes, "bill_text")
+ocr_step(image_bytes, "bill_text", reject_handwriting=True)
 
 st.subheader("2 · Bill text")
 text = st.text_area(

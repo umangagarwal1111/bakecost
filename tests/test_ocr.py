@@ -84,3 +84,24 @@ def test_recipe_sample_end_to_end():
     assert recipe.title == "Eggless Chocolate Cupcakes"
     assert (recipe.yield_quantity, recipe.yield_unit) == (12, "pcs")
     assert len(recipe.lines) == 8
+
+
+@pytest.mark.parametrize("confidences, expected", [
+    ([95, 92, 96, 90, 94], False),            # crisp print
+    ([70, 75, 80, 72, 78], True),             # low average -> handwriting
+    ([96, 95, 30, 20, 94, 93, 40, 95], True), # many weak words
+    ([40, 30], False),                        # too few words to judge
+    ([], False),
+])
+def test_looks_handwritten(confidences, expected):
+    assert ocr.looks_handwritten(confidences) is expected
+
+
+@needs_tesseract
+@pytest.mark.parametrize("filename, handwritten", [
+    ("bill_grocery.png", False), ("bill_photo_tilted.png", False), ("bill_handwritten.png", True),
+])
+def test_handwritten_bill_detected(filename, handwritten):
+    result = ocr.extract_text(ocr.load_image(SAMPLES / filename))
+    assert result.ok and result.confidence is not None
+    assert result.likely_handwritten is handwritten

@@ -119,31 +119,50 @@ def build_invoice_pdf(invoice: dict, settings: dict) -> bytes:
     return bytes(pdf.output())
 
 
+def _cost_sheet_items(cb: dict) -> list[dict]:
+    """Items in a stored cost breakdown. Invoices made before multi-item
+    orders stored a single item's fields at the top level; wrap those."""
+    if "items" in cb:
+        return cb["items"]
+    return [{
+        "recipe_name": cb.get("recipe_name", ""), "order_text": cb.get("order_text", ""),
+        "scale_factor": cb.get("scale_factor", 1), "lines": cb.get("lines", []),
+        "ingredients_subtotal": cb["ingredients_subtotal"], "wastage_percent": cb["wastage_percent"],
+        "wastage_amount": cb["wastage_amount"], "ingredient_cost": cb["ingredient_cost"],
+    }]
+
+
 def build_cost_sheet_pdf(invoice: dict, settings: dict) -> bytes:
     """Internal cost sheet for one order - never give this to the customer."""
     cb = invoice["cost_breakdown"]
+    items = _cost_sheet_items(cb)
     pdf = _Doc("INTERNAL - not for the customer")
     pdf.add_page()
     _header(pdf, settings, f"Cost sheet for {invoice['number']} (internal)")
     pdf.set_font("Helvetica", "", 10)
-    pdf.multi_cell(0, 5.5, _safe(
-        f"{cb.get('recipe_name', '')} - order {cb.get('order_text', '')} "
-        f"(recipe made x{cb.get('scale_factor', 1):.2f})  |  Customer: {invoice['customer_name']}  |  {invoice['date']}"
-    ), **NEXT_LINE)
-    pdf.ln(3)
+    pdf.multi_cell(0, 5.5, _safe(f"Customer: {invoice['customer_name']}  |  {invoice['date']}  |  "
+                                 f"{len(items)} item(s)"), **NEXT_LINE)
 
     w = (64, 34, 40, 36)
-    _row(pdf, [("Ingredient", w[0], "L"), ("Quantity", w[1], "R"), ("Price", w[2], "R"), ("Cost", w[3], "R")],
-         bold=True, fill=True, height=6.2)
-    for line in cb.get("lines", []):
-        _row(pdf, [(line["name"], w[0], "L"), (line["quantity_text"], w[1], "R"),
-                   (line["price_text"], w[2], "R"), (money(line["cost"]), w[3], "R")], height=6.2)
-    pdf.ln(3)
-
     lw, vw = w[0] + w[1] + w[2], w[3]
-    rows = [("Ingredients subtotal", cb["ingredients_subtotal"]),
-            (f"Wastage @ {cb['wastage_percent']:g}%", cb["wastage_amount"]),
-            ("Ingredient cost", cb["ingredient_cost"])]
+    for item in items:
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(0, 7, _safe(f"{item['recipe_name']} - {item['order_text']} "
+                             f"(recipe made x{item.get('scale_factor', 1):.2f})"), **NEXT_LINE)
+        _row(pdf, [("Ingredient", w[0], "L"), ("Quantity", w[1], "R"), ("Price", w[2], "R"), ("Cost", w[3], "R")],
+             bold=True, fill=True, height=6.2)
+        for line in item["lines"]:
+            _row(pdf, [(line["name"], w[0], "L"), (line["quantity_text"], w[1], "R"),
+                       (line["price_text"], w[2], "R"), (money(line["cost"]), w[3], "R")], height=6.2)
+        _row(pdf, [(f"Wastage @ {item['wastage_percent']:g}%", lw, "R"), (money(item["wastage_amount"]), vw, "R")],
+             height=6.2)
+        _row(pdf, [("Ingredient cost", lw, "R"), (money(item["ingredient_cost"]), vw, "R")], bold=True, height=6.2)
+
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 7, "Order total", **NEXT_LINE)
+    rows = [("Ingredient cost (all items)", cb["ingredient_cost"])]
     rows += [(f"  + {name}", amount) for name, amount in cb.get("fixed_cost_lines", [])]
     rows += [("Production cost", cb["production_cost"]),
              (f"Profit ({cb['profit_mode']} {cb['profit_percent']:g}%)", cb["profit_amount"]),

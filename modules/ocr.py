@@ -2,9 +2,10 @@
 Everything OCR lives here, behind a tiny interface, so the engine can be
 swapped (e.g. for EasyOCR or a cloud API) without touching any page.
 
-    extract_text(image) -> OCRResult(text, ok, engine, error)
+    extract_text(image) -> OCRResult(text, ok, engine, error, confidence, likely_handwritten)
     engine_status()     -> (available: bool, message: str)
     set_engine(engine)  -> plug in anything with .name, .available(), .image_to_text()
+                           (and optionally .read_with_confidence(), see below)
 
 extract_text() never raises: if Tesseract is missing or crashes, it returns
 ok=False with a friendly message and the app falls back to manual entry.
@@ -39,12 +40,43 @@ import numpy as np
 from PIL import Image, ImageOps
 
 
+# ---------------------------------------------------------------------------
+# Handwriting detection
+#
+# Tesseract reports how confident it is (0-100) about every word it reads.
+# Printed bills score 90+ almost everywhere; handwriting gives a lower average
+# and many words below 50, because no two letters look alike. We measured
+# printed samples at 93-95 average (0-2 % weak words) and simulated
+# handwriting at 56-77 (10-35 % weak words), so the cut-offs below sit
+# between the two. A very blurry photo of a printed bill can trip the same
+# check, which is why the message also asks for a clearer photo.
+# ---------------------------------------------------------------------------
+HANDWRITING_MAX_MEAN_CONFIDENCE = 80.0   # average below this -> suspicious
+WEAK_WORD_CONFIDENCE = 50.0              # a word below this counts as "weak"
+HANDWRITING_MAX_WEAK_SHARE = 0.25        # 25 %+ weak words -> suspicious
+MIN_WORDS_TO_JUDGE = 3                   # too few words to tell either way
+
+
+def looks_handwritten(word_confidences: list[float]) -> bool:
+    """True if per-word OCR confidences look like handwriting (or an unreadable photo).
+
+    O(w) for w words: one pass for the mean and one for the weak-word share.
+    """
+    if len(word_confidences) < MIN_WORDS_TO_JUDGE:
+        return False
+    mean = sum(word_confidences) / len(word_confidences)
+    weak_share = sum(c < WEAK_WORD_CONFIDENCE for c in word_confidences) / len(word_confidences)
+    return mean < HANDWRITING_MAX_MEAN_CONFIDENCE or weak_share >= HANDWRITING_MAX_WEAK_SHARE
+
+
 @dataclass
 class OCRResult:
     text: str
     ok: bool
     engine: str
     error: str | None = None
+    confidence: float | None = None       # average word confidence 0-100, if the engine reports it
+    likely_handwritten: bool = False
 
 
 class OCREngine(Protocol):
@@ -55,6 +87,10 @@ class OCREngine(Protocol):
     def available(self) -> tuple[bool, str]: ...
 
     def image_to_text(self, image: Image.Image) -> str: ...
+
+    # Optional: engines that can score their own reading may also provide
+    #     read_with_confidence(image) -> (text, [confidence per word])
+    # which enables handwriting detection.
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +141,30 @@ class TesseractEngine:
 
         self._configure()
         return pytesseract.image_to_string(image, lang=self.lang, config=f"--psm {self.psm}")
+
+    def read_with_confidence(self, image: Image.Image) -> tuple[str, list[float]]:
+        """One OCR pass that returns the text AND a confidence for every word.
+
+        image_to_data gives one row per word with its block/paragraph/line
+        numbers, so we rebuild the lines ourselves instead of running OCR a
+        second time just for the text.
+        """
+        import pytesseract
+
+        self._configure()
+        data = pytesseract.image_to_data(image, lang=self.lang, config=f"--psm {self.psm}",
+                                         output_type=pytesseract.Output.DICT)
+        lines: dict[tuple[int, int, int], list[str]] = {}
+        confidences: list[float] = []
+        for i, word in enumerate(data["text"]):
+            word = word.strip()
+            conf = float(data["conf"][i])
+            if not word or conf < 0:           # -1 marks layout rows, not words
+                continue
+            key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+            lines.setdefault(key, []).append(word)   # dicts keep insertion (reading) order
+            confidences.append(conf)
+        return "\n".join(" ".join(words) for words in lines.values()), confidences
 
 
 _engine: OCREngine = TesseractEngine()
@@ -210,11 +270,17 @@ def extract_text(image: Image.Image, clean_up: bool = True) -> OCRResult:
     ok, message = engine_status()
     if not ok:
         return OCRResult("", False, name, message)
+    confidences: list[float] | None = None
     try:
         prepared = preprocess(image) if clean_up else image
-        text = _engine.image_to_text(prepared)
+        if hasattr(_engine, "read_with_confidence"):
+            text, confidences = _engine.read_with_confidence(prepared)
+        else:
+            text = _engine.image_to_text(prepared)
     except Exception as exc:
         return OCRResult("", False, name, f"Couldn't read the image ({exc}). You can type the details instead.")
     if not text.strip():
         return OCRResult("", False, name, "No text found. Try a sharper, brighter photo taken straight on.")
-    return OCRResult(text, True, name)
+    mean = sum(confidences) / len(confidences) if confidences else None
+    return OCRResult(text, True, name, confidence=mean,
+                     likely_handwritten=bool(confidences) and looks_handwritten(confidences))

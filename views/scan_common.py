@@ -37,8 +37,19 @@ def pick_image(prefix: str, sample_glob: str) -> bytes | None:
     return path.read_bytes()
 
 
-def ocr_step(image_bytes: bytes | None, text_key: str) -> None:
+HANDWRITTEN_BILL_MESSAGE = (
+    "✋ **This bill looks handwritten.** Please upload a printed or digital bill "
+    "(a shop receipt, a printed invoice, or a screenshot of an online order). "
+    "If it *is* printed, retake the photo closer, flat and in good light."
+)
+
+
+def ocr_step(image_bytes: bytes | None, text_key: str, reject_handwriting: bool = False) -> None:
     """Show the photo, run OCR on request and put the text into st.session_state[text_key].
+
+    reject_handwriting=True (bills): a handwritten photo is refused with an
+    error and nothing is filled in, because a misread price would silently
+    corrupt the ingredient library. Otherwise (recipes) it is only a warning.
 
     Must run BEFORE the text area that uses `text_key` is drawn, because
     Streamlit only lets us set a widget's value before the widget exists.
@@ -64,8 +75,13 @@ def ocr_step(image_bytes: bytes | None, text_key: str) -> None:
     if c2.button("🔍 Read the text", type="primary", disabled=not ok, key=f"{text_key}_read"):
         with st.spinner("Reading the photo… (the first read can take a few seconds)"):
             result = ocr.extract_text(image, clean_up=clean)
-        if result.ok:
+        if not result.ok:
+            st.error(result.error)
+        elif result.likely_handwritten and reject_handwriting:
+            st.error(HANDWRITTEN_BILL_MESSAGE)
+        else:
+            if result.likely_handwritten:
+                st.warning("This looks handwritten, so some lines may be misread. "
+                           "Check every quantity and name below.", icon="✍️")
             st.session_state[text_key] = result.text
             st.session_state[f"{text_key}_from_ocr"] = True
-        else:
-            st.error(result.error)
