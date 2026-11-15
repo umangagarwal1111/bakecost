@@ -33,20 +33,37 @@ with tab_list:
         for r in rows:
             age = _age_days(r["last_updated"])
             if r["current_price_per_base_unit"] is None:
-                status = "⚠️ no price"
+                status = "⚠️ No price yet - add one"
             elif age is not None and age > STALE_PRICE_DAYS:
-                status = f"⏰ {age} days old"
+                status = f"⏰ Old price ({age} days) - check it"
             else:
-                status = "✅"
+                status = "✅ Up to date"
             table.append({
                 "Name": r["name"], "Category": r["category"],
                 "Price": price_label(r["current_price_per_base_unit"], r["base_unit"]),
-                "Last updated": r["last_updated"] or "—", "Status": status,
+                "Price check": status,
+                "Last updated": r["last_updated"] or "—",
                 "Also known as": r["aliases"],
             })
-        st.dataframe(pd.DataFrame(table), hide_index=True, width="stretch")
-        st.caption(f"{len(rows)} ingredient(s). ⏰ = price older than {STALE_PRICE_DAYS} days; "
-                   "check it before quoting a customer.")
+        st.dataframe(
+            pd.DataFrame(table), hide_index=True, width="stretch",
+            column_config={
+                "Price check": st.column_config.TextColumn(
+                    width="medium",
+                    help=f"✅ Up to date: price updated in the last {STALE_PRICE_DAYS} days.  "
+                         f"⏰ Old price: more than {STALE_PRICE_DAYS} days old, so shop prices may have changed. "
+                         "⚠️ No price yet: orders using it will be under-costed.",
+                ),
+                "Also known as": st.column_config.TextColumn(help="Other names on shop bills, used by Scan a Bill."),
+            },
+        )
+        stale = sum(1 for t in table if not t["Price check"].startswith("✅"))
+        st.caption(
+            f"{len(rows)} ingredient(s). **Price check** tells you whether a price is safe to quote with: "
+            f"✅ up to date · ⏰ older than {STALE_PRICE_DAYS} days · ⚠️ no price yet."
+            + (f" **{stale} need attention** - update them in the *Edit / price history* tab or by scanning a bill."
+               if stale else "")
+        )
 
 # --------------------------------------------------------------------------- add
 with tab_add:
