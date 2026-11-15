@@ -2,7 +2,9 @@
 
 import pytest
 
-from modules.parsing import parse_bill, parse_bill_line, parse_quantity, parse_recipe, parse_recipe_line
+from modules.parsing import (
+    format_bill_text, parse_bill, parse_bill_line, parse_quantity, parse_recipe, parse_recipe_line,
+)
 
 
 @pytest.mark.parametrize("line, name, qty, unit, amount", [
@@ -84,3 +86,49 @@ def test_parse_whole_recipe():
     assert r.title == "Eggless Vanilla Cake"
     assert (r.yield_quantity, r.yield_unit) == (500, "g")
     assert [l.name for l in r.lines] == ["maida", "sugar", "curd"]   # method ignored
+
+
+# --- lining up bill text for display ----------------------------------------------------
+
+OCR_BILL = """SHREE GANESH PROVISION STORE
+MG Road, Bengaluru Ph: 080-2222 0000
+Bill No: 4521 Date: 08/11/2026
+Item Qty Rate Amount
+Maida 1kg 2 46.00 92.00
+Amul Butter 500g 1 285.00 285.00
+Farm Eggs 30 7.50 225.00
+Amul Fresh Cream 1L 1 235.00 235.00
+Milk 1L x 2 136.00
+TOTAL 1234.00
+Thank you! Visit again"""
+
+
+def _items(text):
+    return [(i.name, i.quantity, i.unit, i.amount) for i in parse_bill(text).items]
+
+
+def test_format_bill_text_lines_up_amounts():
+    lines = format_bill_text(OCR_BILL).splitlines()
+    amount_ends = {len(l) for l in lines if l.split()[0] in ("Maida", "Amul", "Farm", "TOTAL", "Item")}
+    assert len(amount_ends) == 1, lines          # every Amount (and the header) ends in the same column
+
+
+def test_format_bill_text_keeps_headers_and_phone_numbers_intact():
+    lines = format_bill_text(OCR_BILL).splitlines()
+    assert lines[0] == "SHREE GANESH PROVISION STORE"
+    assert lines[1] == "MG Road, Bengaluru Ph: 080-2222 0000"
+    assert lines[-1] == "Thank you! Visit again"
+
+
+@pytest.mark.parametrize("text", [
+    OCR_BILL,
+    "MAIDA 1KG 2 x 45.00 90.00\nSugar 5 kg 240.00\nCocoa Powder 200g Rs. 1,210.00",
+    "Vanilla Essence 45.00\nEggs 30 7.00 210.00",
+])
+def test_format_bill_text_never_changes_what_is_parsed(text):
+    assert _items(format_bill_text(text)) == _items(text)
+
+
+def test_format_bill_text_handles_text_without_items():
+    assert format_bill_text("") == ""
+    assert format_bill_text("Thank you\nVisit again") == "Thank you\nVisit again"

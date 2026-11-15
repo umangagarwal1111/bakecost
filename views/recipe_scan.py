@@ -9,7 +9,7 @@ from modules import db, units
 from modules.matching import AUTO_SELECT_THRESHOLD, rank_matches
 from modules.parsing import parse_recipe
 from views.common import ALL_RECIPE_UNITS, YIELD_UNITS, candidates, flash, friendly_errors, get_conn, show_flash
-from views.scan_common import ocr_step, pick_image
+from views.scan_common import ocr_step, pick_image, use_fixed_width_text_boxes
 
 NEW = "➕ add as new ingredient"
 SKIP = "— leave out —"
@@ -34,6 +34,7 @@ st.caption("Photograph a recipe card or book page. BakeCost lists the ingredient
 st.info("**Printed recipes work best.** Handwritten recipes are much harder for the reader — expect to "
         "correct quantities and names by hand, or simply type the recipe into the box below.", icon="✍️")
 show_flash()
+use_fixed_width_text_boxes()
 
 st.subheader("1 · Photo")
 image_bytes = pick_image("recipe", "recipe_*.png")

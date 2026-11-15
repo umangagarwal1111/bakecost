@@ -156,6 +156,67 @@ def parse_bill(text: str) -> BillParseResult:
     return result
 
 
+# A line that ends in one or more space-separated numbers ("... 2 46.00 92.00").
+# The name part is lazy, so a pack size glued to letters ("1kg", "1L") stays
+# in the name: "(?![A-Za-z])" stops "1" in "1L" counting as a number column.
+_TRAILING_NUMBERS = re.compile(rf"^(?P<name>.*?[A-Za-z].*?)(?P<nums>(?:\s+(?:{NUMBER_RE})(?![A-Za-z\d/,.-]))+)$")
+MAX_NAME_WIDTH = 30
+# Words that make up a bill's column-header row ("Item  Qty  Rate  Amount").
+_HEADER_WORDS = {"item", "items", "particulars", "description", "product", "qty", "quantity",
+                 "rate", "price", "mrp", "amount", "amt", "total", "value", "net"}
+
+
+def format_bill_text(text: str) -> str:
+    """Line bill text up in columns so a person can check it at a glance.
+
+    OCR returns each line with single spaces ("Maida 1kg 2 46.00 92.00"), so
+    the Qty / Rate / Amount columns wander. This pads every item name to the
+    same width and right-aligns the numbers, counting columns from the
+    right so the amounts always line up, even on lines with fewer numbers
+    (like TOTAL). A column-header row ("Item Qty Rate Amount") is lined up
+    over its columns too. Other lines are left as they are.
+
+    Only spacing changes, and parse_bill_line ignores spacing, so the parsed
+    result is identical (the tests check this). Two passes over the lines:
+    O(total characters).
+    """
+    rows: list[tuple[str, list[str]] | str] = []
+    for line in text.splitlines():
+        tidy = " ".join(line.split())
+        m = _TRAILING_NUMBERS.match(tidy)
+        # The word before the numbers must contain a letter ("1kg", "Eggs"), so a
+        # header like "Ph: 080-2222 0000" isn't mistaken for an item row.
+        words = tidy.split()
+        if m and re.search(r"[A-Za-z]", m.group("name").split()[-1]):
+            rows.append((m.group("name").strip(), m.group("nums").split()))
+        elif len(words) >= 2 and all(w.lower().strip(":.") in _HEADER_WORDS for w in words):
+            rows.append((words[0], words[1:]))          # header: first word over the names
+        else:
+            rows.append(tidy)
+
+    item_rows = [r for r in rows if isinstance(r, tuple)]
+    if not item_rows:
+        return "\n".join(r for r in rows if isinstance(r, str))
+    name_width = min(MAX_NAME_WIDTH, max(len(name) for name, _ in item_rows))
+    column_count = max(len(nums) for _, nums in item_rows)
+    # widths[k] = widest number in the k-th column counted from the right
+    widths = [max((len(nums[-1 - k]) for _, nums in item_rows if len(nums) > k), default=0)
+              for k in range(column_count)]
+
+    out = []
+    for row in rows:
+        if isinstance(row, str):
+            out.append(row)
+            continue
+        name, nums = row
+        cells = []
+        for k in reversed(range(column_count)):        # leftmost column first
+            value = nums[-1 - k] if len(nums) > k else ""
+            cells.append(value.rjust(widths[k]))
+        out.append((name.ljust(name_width) + "   " + "   ".join(cells)).rstrip())
+    return "\n".join(out)
+
+
 # ---------------------------------------------------------------------------
 # Recipes
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import streamlit as st
@@ -10,6 +11,22 @@ from PIL import Image
 from modules import ocr
 
 SAMPLES_DIR = Path(__file__).resolve().parent.parent / "samples"
+
+
+def use_fixed_width_text_boxes() -> None:
+    """Show text boxes in a fixed-width font so bill columns line up like on
+    paper. Streamlit has no option for this, so we add a little CSS."""
+    st.markdown(
+        """<style>
+        [data-testid="stTextArea"] textarea {
+            font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+            font-size: 0.9rem;
+            line-height: 1.55;
+            white-space: pre;          /* keep columns: scroll sideways instead of wrapping */
+        }
+        </style>""",
+        unsafe_allow_html=True,
+    )
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -44,12 +61,14 @@ HANDWRITTEN_BILL_MESSAGE = (
 )
 
 
-def ocr_step(image_bytes: bytes | None, text_key: str, reject_handwriting: bool = False) -> None:
+def ocr_step(image_bytes: bytes | None, text_key: str, reject_handwriting: bool = False,
+             tidy: Callable[[str], str] | None = None) -> None:
     """Show the photo, run OCR on request and put the text into st.session_state[text_key].
 
     reject_handwriting=True (bills): a handwritten photo is refused with an
     error and nothing is filled in, because a misread price would silently
     corrupt the ingredient library. Otherwise (recipes) it is only a warning.
+    `tidy`, if given, reformats the text before showing it (bills: line up columns).
 
     Must run BEFORE the text area that uses `text_key` is drawn, because
     Streamlit only lets us set a widget's value before the widget exists.
@@ -83,5 +102,5 @@ def ocr_step(image_bytes: bytes | None, text_key: str, reject_handwriting: bool 
             if result.likely_handwritten:
                 st.warning("This looks handwritten, so some lines may be misread. "
                            "Check every quantity and name below.", icon="✍️")
-            st.session_state[text_key] = result.text
+            st.session_state[text_key] = tidy(result.text) if tidy else result.text
             st.session_state[f"{text_key}_from_ocr"] = True

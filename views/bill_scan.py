@@ -12,9 +12,9 @@ import streamlit as st
 
 from modules import db, units
 from modules.matching import AUTO_SELECT_THRESHOLD, best_match, should_preselect
-from modules.parsing import parse_bill
+from modules.parsing import format_bill_text, parse_bill
 from views.common import ALL_RECIPE_UNITS, candidates, empty_library_hint, flash, get_conn, inr, show_flash
-from views.scan_common import ocr_step, pick_image
+from views.scan_common import ocr_step, pick_image, use_fixed_width_text_boxes
 
 SKIP = "— don't save —"
 BIG_CHANGE = 0.5  # warn when a price moves by more than 50 %
@@ -24,6 +24,7 @@ st.title("📷 Scan a Bill")
 st.caption("Photograph a **printed or digital** shop bill. BakeCost reads it, **you check every line**, "
            "and only the lines you confirm update your prices. Handwritten bills can't be read reliably.")
 show_flash()
+use_fixed_width_text_boxes()
 if empty_library_hint(conn):
     st.stop()
 
@@ -32,13 +33,16 @@ st.subheader("1 · Photo")
 image_bytes = pick_image("bill", "bill_*.png")
 if "_bill_text_next" in st.session_state:          # set by a previous save; see ocr_step()
     st.session_state["bill_text"] = st.session_state.pop("_bill_text_next")
-ocr_step(image_bytes, "bill_text", reject_handwriting=True)
+ocr_step(image_bytes, "bill_text", reject_handwriting=True, tidy=format_bill_text)
 
 st.subheader("2 · Bill text")
+# Grow the box with the bill (about 26 px per line) so nothing hides below the fold.
+line_count = st.session_state.get("bill_text", "").count("\n") + 1
 text = st.text_area(
     "Fix any reading mistakes here — or type/paste the bill yourself, one item per line",
-    key="bill_text", height=220,
-    placeholder="Maida 1kg   2   45.00   90.00\nAmul Butter 500g   1   280.00   280.00\nEggs   30   7.00   210.00",
+    key="bill_text", height=max(220, min(560, 40 + 26 * line_count)),
+    placeholder=format_bill_text("Item Qty Rate Amount\nMaida 1kg 2 45.00 90.00\n"
+                                 "Amul Butter 500g 1 280.00 280.00\nEggs 30 7.00 210.00"),
 )
 if not text.strip():
     st.stop()
